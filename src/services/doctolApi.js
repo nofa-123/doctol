@@ -8,7 +8,7 @@ export const doctolApi = {
   service: (slug) => get(`/api/v1/services/${encodeURIComponent(slug)}`),
   offers: () => get('/api/v1/offers'),
   offer: (slug) => get(`/api/v1/offers/${encodeURIComponent(slug)}`),
-  packages: () => get('/api/v1/packages'),
+  packages: (serviceSlug = '') => get('/api/v1/packages' + (serviceSlug ? `?service_slug=${encodeURIComponent(serviceSlug)}` : '')),
   package: (slug) => get(`/api/v1/packages/${encodeURIComponent(slug)}`),
   blog: (params = '') => get(`/api/v1/blog${params ? `?${params}` : ''}`),
   article: (slug) => get(`/api/v1/blog/${encodeURIComponent(slug)}`),

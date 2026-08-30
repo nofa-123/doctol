@@ -25,6 +25,7 @@ export const useServicesStore = defineStore('services', () => {
   const categories = ref([])
   const offers = ref([])
   const packages = ref([])
+  const packagesForCategory = ref([])
   const reviews = ref([])
   const ratingSummary = ref(null)
   const articles = ref([])
@@ -140,6 +141,14 @@ export const useServicesStore = defineStore('services', () => {
     return detail
   }
 
+  async function loadPackagesForCategory(slug) {
+    if (!slug) {
+      packagesForCategory.value = []
+      return
+    }
+    packagesForCategory.value = await fetchPackages(slug)
+  }
+
   /** Filters the catalogue by category id and free-text query. */
   function filterServices({ category = 'all', query = '' } = {}) {
     const q = query.trim()
@@ -162,6 +171,7 @@ export const useServicesStore = defineStore('services', () => {
     categories,
     offers,
     packages,
+    packagesForCategory,
     reviews,
     ratingSummary,
     articles,
@@ -185,6 +195,7 @@ export const useServicesStore = defineStore('services', () => {
     ensureLoaded,
     loadNeighborhoods,
     loadService,
+    loadPackagesForCategory,
     filterServices,
   }
 })

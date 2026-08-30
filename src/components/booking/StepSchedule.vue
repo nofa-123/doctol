@@ -19,6 +19,8 @@ onMounted(async () => {
 })
 
 const hasSlots = computed(() => booking.availability.some((slot) => slot.available))
+
+const isFriday = (date) => new Date(date).getDay() === 5
 </script>
 
 <template>
@@ -37,6 +39,7 @@ const hasSlots = computed(() => booking.availability.some((slot) => slot.availab
             :class="{
               'sd__day--on': booking.schedule.date === day.date,
               'sd__day--full': day.full,
+              'sd__day--friday': isFriday(day.date),
             }"
             :disabled="day.full"
             :aria-pressed="booking.schedule.date === day.date"
@@ -167,6 +170,17 @@ const hasSlots = computed(() => booking.availability.some((slot) => slot.availab
 .sd__day--full {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.sd__day--friday:not(.sd__day--on) {
+  background: var(--dt-danger);
+  border-color: var(--dt-danger);
+  color: #fff;
+}
+
+.sd__day--friday:not(.sd__day--on) .sd__day-name,
+.sd__day--friday:not(.sd__day--on) .sd__day-full {
+  color: #fff;
 }
 
 .sd__day-name {

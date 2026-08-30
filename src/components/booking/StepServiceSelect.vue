@@ -46,7 +46,9 @@ const isSinglePick = computed(() => booking.categoryId === 'rehab')
  * combine several categories), so keep the package rail available throughout
  * the service-selection step whenever the API returned bookable packages.
  */
-const showPackages = computed(() => catalogue.packages.length > 0)
+const showPackages = computed(() => catalogue.packagesForCategory.length > 0)
+
+const serviceSlug = computed(() => servicesInCategory.value[0]?.slug ?? '')
 
 // Opening a different category collapses whatever was expanded before.
 watch(
@@ -91,14 +93,16 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => serviceSlug.value,
+  (slug) => {
+    catalogue.loadPackagesForCategory(slug)
+  },
+  { immediate: true },
+)
+
 function onToggleOpen(service) {
-  if (openId.value === service.id) {
-    openId.value = ''
-    return
-  }
-  openId.value = service.id
-  // Expanding commits the default configuration so the price is real at once.
-  if (!cart.isSelected(service.id)) onSelect(service, { keepOpen: true })
+  openId.value = openId.value === service.id ? '' : service.id
 }
 
 function onSelect(service, { keepOpen = false } = {}) {
@@ -156,7 +160,7 @@ function offerFor(service) {
 
       <PackageStrip
         v-if="showPackages"
-        :packages="catalogue.packages"
+        :packages="catalogue.packagesForCategory"
         @details="detailsPackage = $event"
       />
 

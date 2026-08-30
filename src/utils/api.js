@@ -187,9 +187,9 @@ export const fetchOffers = () =>
       }
     }).filter((item) => item.isBookable) : offers
   }, offers)
-export const fetchPackages = () =>
+export const fetchPackages = (serviceSlug = '') =>
   remoteOrFallback(async () => {
-    const source = apiData.list(await doctolApi.packages())
+    const source = apiData.list(await doctolApi.packages(serviceSlug))
     if (!source.length) return []
 
     // The list serializer may omit package services, media or perks. Enrich

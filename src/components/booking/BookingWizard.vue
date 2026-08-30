@@ -267,7 +267,7 @@ async function captureLeadAndStart(payload) {
 }
 
 .wiz__summary {
-  display: none;
+  display: flex;
 }
 
 /* ---------- sticky action bar ---------- */
@@ -276,7 +276,7 @@ async function captureLeadAndStart(payload) {
   inset-inline: 0;
   inset-block-end: var(--dt-mobilenav-h);
   z-index: 40;
-  padding: var(--dt-space-3) var(--dt-gutter) calc(var(--dt-space-3) + env(safe-area-inset-bottom, 0px));
+  padding: var(--dt-space-3) var(--dt-gutter) calc(var(--dt-space-5) + env(safe-area-inset-bottom, 0px));
   background: rgb(255 255 255 / 0.94);
   backdrop-filter: blur(18px) saturate(180%);
   -webkit-backdrop-filter: blur(18px) saturate(180%);
