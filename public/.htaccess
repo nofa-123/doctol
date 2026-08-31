@@ -2,10 +2,16 @@
   RewriteEngine On
   RewriteBase /
 
+  # Allow backend-api directory to handle its own requests
+  RewriteCond %{REQUEST_URI} ^/backend-api/
+  RewriteRule ^ - [L]
+
+  # Serve existing files and directories directly
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d
   RewriteRule ^ - [L]
 
+  # Route all other requests to index.html (SPA)
   RewriteRule ^ index.html [L]
 </IfModule>
 
