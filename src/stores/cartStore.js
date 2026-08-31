@@ -149,13 +149,66 @@ export const useCartStore = defineStore('cart', () => {
 
   function toApiItems() {
     const serviceItems = lines.value.map((line) => {
-      const groups = line.service.config?.kind === 'dynamic' ? line.service.config.groups ?? [] : []
-      const configuration = Object.fromEntries(
-        groups
-          .filter((group) => Object.prototype.hasOwnProperty.call(line.config ?? {}, group.key))
-          .map((group) => [group.key, line.config[group.key]]),
-      )
-      const localCount = Number(line.config?.count ?? 1)
+      const configKind = line.service.config?.kind
+      const groups = line.service.config?.groups ?? []
+      let configuration = {}
+      let localCount = 1
+
+      // Debug logging
+      if (import.meta.env.DEV) {
+        console.log('[CartStore] Processing service:', {
+          slug: line.service.slug,
+          bookingSlug: line.service.bookingSlug,
+          configKind,
+          groupsCount: groups.length,
+          groups: groups.map(g => ({ key: g.key, inputType: g.inputType, default: g.default })),
+          lineConfig: line.config,
+          fullServiceConfig: line.service.config,
+        })
+      }
+
+      // Check if service has groups (from API schema) - regardless of kind
+      if (groups.length > 0) {
+        // Dynamic services from API: send only keys defined in groups
+        // This is the fully dynamic approach - uses the schema from the API
+        groups.forEach((group) => {
+          const key = group.key
+          const inputType = group.inputType ?? group.input_type ?? 'select'
+          
+          // Check if we have a value for this key in the config
+          if (Object.prototype.hasOwnProperty.call(line.config ?? {}, key)) {
+            const value = line.config[key]
+            
+            // Handle different input types
+            if (inputType === 'counter' || inputType === 'decimal') {
+              configuration[key] = Number(value)
+            } else if (inputType === 'collection') {
+              // Collection items - send as array
+              if (Array.isArray(value) && value.length > 0) {
+                configuration[key] = value
+              }
+            } else if (inputType === 'multi_select') {
+              // Multi-select - send as array
+              if (Array.isArray(value) && value.length > 0) {
+                configuration[key] = value
+              }
+            } else {
+              // Select, radio, boolean, etc. - send as string
+              if (value !== undefined && value !== null && value !== '') {
+                configuration[key] = value
+              }
+            }
+          } else if (group.default !== undefined && group.default !== null && group.default !== '') {
+            // Use default value if no value is set and default exists
+            configuration[key] = group.default
+          }
+        })
+        localCount = Number(line.config?.count ?? 1)
+      } else {
+        // Services without groups - just send quantity
+        localCount = Number(line.config?.count ?? 1)
+      }
+
       return {
         type: 'service',
         service_slug: line.service.bookingSlug ?? line.service.slug,

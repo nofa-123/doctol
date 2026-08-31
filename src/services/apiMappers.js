@@ -155,6 +155,8 @@ const dynamicBookingConfig = (item, parent = null) => {
         helpText: field.help_text ?? '',
         pricePerUnit: field.price_per_unit,
         priceAfter: field.price_after,
+        // Include schema for collection fields (item_fields, pricing, etc.)
+        schema: field.schema,
         values: (field.options ?? []).map((value) => ({
           key: String(value.value),
           label: value.label ?? localized(value.name, String(value.value)),

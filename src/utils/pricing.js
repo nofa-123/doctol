@@ -26,10 +26,47 @@ export function defaultConfig(service) {
   switch (c.kind) {
     case 'dynamic':
       return Object.fromEntries(
-        c.groups.map((group) => [
-          group.key,
-          group.default ?? group.values?.[0]?.key ?? (group.inputType === 'counter' ? group.min ?? 0 : ''),
-        ]),
+        c.groups.map((group) => {
+          const inputType = group.inputType ?? 'select'
+          if (inputType === 'collection') {
+            // Build a sensible default collection item from the schema
+            const schema = group.schema ?? {}
+            const itemFields = schema.item_fields ?? []
+            const typeField = itemFields.find((f) => f.key === 'type')
+            const firstType =
+              schema.displayOptions?.[0]?.value ??
+              typeField?.options?.[0]?.value ??
+              typeField?.options?.[0]?.key ??
+              ''
+            if (itemFields.some((f) => f.key === 'width_m')) {
+              // area collection (carpet / moquette)
+              const minArea = schema.pricing?.minimum_square_meters ?? 1
+              const side = Math.sqrt(Math.max(1, minArea))
+              return [group.key, [{ width_m: side, height_m: side, quantity: 1 }]]
+            }
+            if (itemFields.some((f) => f.key === 'type')) {
+              // per-unit collection (tank / curtain / mattress)
+              const item = { type: firstType, quantity: 1 }
+              // add any extra fields with sensible defaults
+              itemFields.forEach((field) => {
+                if (field.key === 'type' || field.key === 'quantity') return
+                if (field.input_type === 'decimal' || field.input_type === 'counter') {
+                  item[field.key] = Number(field.min ?? 0)
+                } else if (field.input_type === 'select') {
+                  item[field.key] = field.options?.[0]?.value ?? field.options?.[0]?.key ?? ''
+                } else {
+                  item[field.key] = field.default ?? ''
+                }
+              })
+              return [group.key, [item]]
+            }
+            return [group.key, []]
+          }
+          return [
+            group.key,
+            group.default ?? group.values?.[0]?.key ?? (inputType === 'counter' ? group.min ?? 0 : ''),
+          ]
+        }),
       )
     case 'capacity':
       return { tierId: c.tiers[0].id, count: c.tiers[0].seats }
@@ -238,11 +275,51 @@ export function reconcile(service, config) {
 
   if (c.kind === 'dynamic') {
     c.groups.forEach((group) => {
-      if (group.inputType === 'counter') {
+      const inputType = group.inputType ?? 'select'
+      if (inputType === 'counter') {
         const min = Number(group.min ?? 0)
         const max = Number(group.max ?? 99)
         const value = Number(cfg[group.key] ?? group.default ?? min)
         cfg[group.key] = Math.min(max, Math.max(min, Number.isFinite(value) ? value : min))
+      } else if (inputType === 'collection') {
+        const schema = group.schema ?? {}
+        const itemFields = schema.item_fields ?? []
+        const displayOptions = schema.displayOptions ?? []
+        const typeField = itemFields.find((f) => f.key === 'type')
+        const validTypes = new Set([
+          ...displayOptions.map((o) => String(o.value)),
+          ...(typeField?.options ?? []).map((o) => String(o.value ?? o.key)),
+        ])
+        const items = Array.isArray(cfg[group.key]) ? cfg[group.key] : []
+        // filter out invalid items and ensure every item has required fields
+        cfg[group.key] = items
+          .filter((item) => !validTypes.size || validTypes.has(String(item.type)))
+          .map((item) => {
+            const clean = { ...item }
+            itemFields.forEach((field) => {
+              if (clean[field.key] === undefined || clean[field.key] === null) {
+                if (field.key === 'type') {
+                  clean.type = displayOptions[0]?.value ?? typeField?.options?.[0]?.value ?? typeField?.options?.[0]?.key ?? ''
+                } else if (field.key === 'quantity') {
+                  clean.quantity = 1
+                } else if (field.input_type === 'decimal' || field.input_type === 'counter') {
+                  clean[field.key] = Number(field.min ?? 0)
+                } else if (field.input_type === 'select') {
+                  clean[field.key] = field.options?.[0]?.value ?? field.options?.[0]?.key ?? ''
+                } else {
+                  clean[field.key] = field.default ?? ''
+                }
+              }
+              // normalize numeric bounds
+              if ((field.input_type === 'decimal' || field.input_type === 'counter') && field.min !== undefined) {
+                const num = Number(clean[field.key])
+                if (!Number.isFinite(num) || num < Number(field.min)) {
+                  clean[field.key] = Number(field.min)
+                }
+              }
+            })
+            return clean
+          })
       } else if (!group.values.some((value) => String(value.key) === String(cfg[group.key]))) {
         cfg[group.key] = group.values?.[0]?.key ?? ''
       }

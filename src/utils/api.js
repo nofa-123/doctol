@@ -1,28 +1,12 @@
 /**
  * API layer.
  *
- * Every network-shaped read/write in the app goes through this module. Today it
- * resolves from `src/data/*` with simulated latency; to connect the Laravel
- * backend, replace each function body with a `request()` call and delete the
- * `mock*` helpers — no component or store needs to change.
- *
- *   const BASE = import.meta.env.VITE_API_BASE ?? '/api/v1'
- *   export const fetchServices = () => request('/services')
+ * Every network-shaped read/write in the app goes through this module.
+ * All data is fetched from the Laravel backend API - no dummy data fallback.
  */
 
-import { services, discoveryOptions, categories } from '@/data/services'
-import { offers } from '@/data/offers'
-import { packages } from '@/data/packages'
-import { reviews, ratingSummary } from '@/data/reviews'
-import {
-  articles,
-  beforeAfterCases,
-  cities,
-  experienceSteps,
-  faqs,
-  stats,
-  trustFeatures,
-} from '@/data/content'
+// Keep imports for fallback images only (not for data)
+import { services, categories } from '@/data/services'
 import { toISODate } from '@/utils/format'
 import { doctolApi } from '@/services/doctolApi'
 import {
@@ -35,35 +19,6 @@ import {
   mapBookableServices,
   mapMediaUrl,
 } from '@/services/apiMappers'
-
-/** Simulated latency band, kept short enough that the demo stays snappy. */
-const LATENCY = [180, 420]
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-function delay() {
-  const [min, max] = LATENCY
-  return wait(min + Math.random() * (max - min))
-}
-
-/**
- * Deep copy that behaves like a JSON round-trip over the wire.
- *
- * Deliberately not `structuredClone`: everything crossing this boundary is
- * about to become a JSON request or response body, and `structuredClone`
- * throws on values JSON simply drops — Vue reactive proxies, `File` handles,
- * functions. A real `fetch` would never fail for those reasons, so the mock
- * must not either.
- */
-function wireClone(payload) {
-  return payload === undefined ? undefined : JSON.parse(JSON.stringify(payload))
-}
-
-async function resolve(payload) {
-  await delay()
-  // A fresh object every call, exactly as a real fetch would hand back.
-  return wireClone(payload)
-}
 
 /* ------------------------------------------------------------------ */
 /* Catalogue                                                           */
@@ -90,12 +45,13 @@ function localCategoryFor(item, index = 0) {
 }
 
 function withLocalServiceMedia(item, index = 0) {
+  // Only use local data for images/icons fallback, not for config
   const local = services.find((entry) => entry.id === item.slug || entry.slug === item.slug)
     ?? services.find((entry) => entry.name === item.name)
   const category = localCategoryFor(item, index)
   const fallbackImage = local?.image || category?.photo || category?.image || ''
   return {
-    ...(local ?? {}),
+    // Don't spread local - only use API data for service config
     ...item,
     image: item.image || fallbackImage,
     fallbackImage,
@@ -103,178 +59,144 @@ function withLocalServiceMedia(item, index = 0) {
   }
 }
 
-async function remoteOrFallback(loader, fallback) {
-  try {
-    const value = await loader()
-    return value ?? fallback
-  } catch (error) {
-    if (import.meta.env.DEV) console.warn('[Doctol API] Using local fallback:', error.message)
-    return resolve(fallback)
-  }
+
+
+export const fetchServices = async () => {
+  // Fetch services from API only - no dummy data fallback
+  const source = apiData.list(await doctolApi.services())
+  // The current contract includes every bookable child and its complete
+  // configuration_schema in the list response. Avoid the legacy detail
+  // request, which is neither needed nor part of the booking flow.
+  const mapped = mapBookableServices(source)
+
+  remoteServices = mapped.map(withLocalServiceMedia)
+  return remoteServices
 }
 
-export const fetchServices = () =>
-  remoteOrFallback(async () => {
-    const source = apiData.list(await doctolApi.services())
-    // The current contract includes every bookable child and its complete
-    // configuration_schema in the list response. Avoid the legacy detail
-    // request, which is neither needed nor part of the booking flow.
-    const mapped = mapBookableServices(source)
-
-    remoteServices = mapped.map(withLocalServiceMedia)
-    return remoteServices.length ? remoteServices : services
-  }, services)
-
-export const fetchCategories = () =>
-  remoteOrFallback(async () => {
-    const serviceSource = apiData.list(await doctolApi.services())
-    if (!remoteServices.length) remoteServices = mapBookableServices(serviceSource).map(withLocalServiceMedia)
-    const source = serviceSource
-      .map((item) => {
-        const nested = item.category ?? (typeof item.main_service === 'object' ? item.main_service : null)
-        return nested || (item.main_service === true ? item : null)
-      })
-      .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
-    if (source.length) {
-      return [...new Map(source.map((item) => [item.id ?? item.slug, item])).values()]
-        .map((item, index) => {
-          const remote = mapCategory(item, index)
-          const local = localCategoryFor(item, index)
-          const fallbackImage = local?.photo || local?.image || ''
-          return {
-            ...local,
-            ...remote,
-            name: remote.name === 'خدمات أخرى' ? (local?.name ?? remote.name) : remote.name,
-            image: remote.image || local?.image || fallbackImage,
-            photo: remote.photo || local?.photo || local?.image || '',
-            fallbackImage,
-            icon: remote.icon === 'grid' ? (local?.icon ?? remote.icon) : remote.icon,
-          }
-        })
-    }
-    const derived = [...new Map(remoteServices.map((item) => [
-      String(item.categoryId || 'other'),
-      {
-        id: String(item.categoryId || 'other'),
-        slug: String(item.categoryId || 'other'),
-        name: item.category?.name ?? item.category_name ?? 'خدمات أخرى',
-        icon: item.category?.icon ?? 'grid',
-      },
-    ])).values()]
-    return derived.length ? derived.map(mapCategory) : categories
-  }, categories)
-export const fetchService = (idOrSlug) =>
-  remoteOrFallback(async () => {
-    const response = apiData.unwrap(await doctolApi.service(idOrSlug), {})
-    const source = response?.service ?? response?.item ?? response
-    if (!source || typeof source !== 'object' || Array.isArray(source)) {
-      throw new ApiError('الخدمة غير موجودة', 404)
-    }
-    const mapped = mapService(source)
-    return withLocalServiceMedia(mapped)
-  }, services.find((s) => s.id === idOrSlug || s.slug === idOrSlug) ?? null)
-export const fetchOffers = () =>
-  remoteOrFallback(async () => {
-    const result = apiData.list(await doctolApi.offers()).map(mapOffer)
-    return result.length ? result.map((item, index) => {
-      const local = offers.find((entry) => entry.id === item.slug || entry.id === item.id) ?? offers[index % offers.length]
-      return {
-        ...local,
-        ...item,
-        image: item.image || local.image,
-        fallbackImage: local.image,
-        highlights: item.highlights?.length ? item.highlights : local.highlights,
-      }
-    }).filter((item) => item.isBookable) : offers
-  }, offers)
-export const fetchPackages = (serviceSlug = '') =>
-  remoteOrFallback(async () => {
-    const source = apiData.list(await doctolApi.packages(serviceSlug))
-    if (!source.length) return packages
-
-    // The list serializer may omit package services, media or perks. Enrich
-    // every row from Laravel's package-detail endpoint, but never merge it
-    // with src/data/packages.js: a successful remote response must remain the
-    // single source of truth for the name, price, image and included services.
-    const detailed = await Promise.all(source.map(async (summary) => {
-      const slug = summary.slug ?? summary.id
-      if (!slug) return summary
-      try {
-        const response = apiData.unwrap(await doctolApi.package(slug), summary)
-        const detail = response?.package ?? response?.item ?? response
-        return detail && typeof detail === 'object' && !Array.isArray(detail)
-          ? { ...summary, ...detail }
-          : summary
-      } catch {
-        // A failed detail request must not discard a valid package returned by
-        // the list endpoint. It also must not substitute local demo content.
-        return summary
-      }
-    }))
-
-    const mapped = detailed
-      .map(mapPackage)
+export const fetchCategories = async () => {
+  // Fetch categories from API only - no dummy data fallback
+  const serviceSource = apiData.list(await doctolApi.services())
+  if (!remoteServices.length) remoteServices = mapBookableServices(serviceSource).map(withLocalServiceMedia)
+  const source = serviceSource
+    .map((item) => {
+      const nested = item.category ?? (typeof item.main_service === 'object' ? item.main_service : null)
+      return nested || (item.main_service === true ? item : null)
+    })
+    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+  if (source.length) {
+    return [...new Map(source.map((item) => [item.id ?? item.slug, item])).values()]
       .map((item, index) => {
-        const local = packages.find((entry) => entry.id === item.slug || entry.id === item.id)
-          ?? packages.find((entry) => entry.name === item.name)
-          ?? packages[index % packages.length]
+        const remote = mapCategory(item, index)
+        const local = localCategoryFor(item, index)
+        const fallbackImage = local?.photo || local?.image || ''
         return {
-          ...item,
-          image: item.image || local?.image || '',
-          fallbackImage: local?.image || '',
+          ...remote,
+          name: remote.name === 'خدمات أخرى' ? (local?.name ?? remote.name) : remote.name,
+          image: remote.image || local?.image || fallbackImage,
+          photo: remote.photo || local?.photo || local?.image || '',
+          fallbackImage,
+          icon: remote.icon === 'grid' ? (local?.icon ?? remote.icon) : remote.icon,
         }
       })
-      .filter((item) => item.slug && item.isActive !== false && item.isBookable !== false)
+  }
+  // Derive categories from services if not available directly
+  const derived = [...new Map(remoteServices.map((item) => [
+    String(item.categoryId || 'other'),
+    {
+      id: String(item.categoryId || 'other'),
+      slug: String(item.categoryId || 'other'),
+      name: item.category?.name ?? item.category_name ?? 'خدمات أخرى',
+      icon: item.category?.icon ?? 'grid',
+    },
+  ])).values()]
+  return derived.map(mapCategory)
+}
+export const fetchService = async (idOrSlug) => {
+  // Fetch service from API only - no dummy data fallback
+  const response = apiData.unwrap(await doctolApi.service(idOrSlug), {})
+  const source = response?.service ?? response?.item ?? response
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw new Error('الخدمة غير موجودة')
+  }
+  const mapped = mapService(source)
+  return withLocalServiceMedia(mapped)
+}
+export const fetchOffers = async () => {
+  // Fetch offers from API only - no dummy data fallback
+  const result = apiData.list(await doctolApi.offers()).map(mapOffer)
+  return result.filter((item) => item.isBookable)
+}
+export const fetchPackages = async (serviceSlug = '') => {
+  // Fetch packages from API only - no dummy data fallback
+  const source = apiData.list(await doctolApi.packages(serviceSlug))
 
-    return mapped.length ? mapped : packages
-  }, packages)
+  // The list serializer may omit package services, media or perks. Enrich
+  // every row from Laravel's package-detail endpoint.
+  const detailed = await Promise.all(source.map(async (summary) => {
+    const slug = summary.slug ?? summary.id
+    if (!slug) return summary
+    try {
+      const response = apiData.unwrap(await doctolApi.package(slug), summary)
+      const detail = response?.package ?? response?.item ?? response
+      return detail && typeof detail === 'object' && !Array.isArray(detail)
+        ? { ...summary, ...detail }
+        : summary
+    } catch {
+      return summary
+    }
+  }))
+
+  return detailed
+    .map(mapPackage)
+    .filter((item) => item.slug && item.isActive !== false && item.isBookable !== false)
+}
 function mapReview(item, index = 0) {
-  const local = reviews[index % reviews.length] ?? {}
   return {
-    ...local,
     ...item,
     id: item.id ?? `review-${index}`,
-    name: localizedText(item.customer_name ?? item.client_name ?? item.name, local.name ?? 'عميل دكتول'),
-    city: localizedText(item.city?.name ?? item.city_name ?? item.city, local.city ?? ''),
-    district: localizedText(item.neighborhood?.name ?? item.district ?? item.neighborhood_name, local.district ?? ''),
-    rating: Number(item.rating ?? item.stars ?? local.rating ?? 5),
-    text: localizedText(item.comment ?? item.review ?? item.content ?? item.text, local.text ?? ''),
-    serviceLabel: localizedText(item.service?.name ?? item.service_name ?? item.service, local.serviceLabel ?? ''),
-    date: localizedText(item.date_label ?? item.created_at ?? item.date, local.date ?? ''),
+    name: localizedText(item.customer_name ?? item.client_name ?? item.name, 'عميل دكتول'),
+    city: localizedText(item.city?.name ?? item.city_name ?? item.city, ''),
+    district: localizedText(item.neighborhood?.name ?? item.district ?? item.neighborhood_name, ''),
+    rating: Number(item.rating ?? item.stars ?? 5),
+    text: localizedText(item.comment ?? item.review ?? item.content ?? item.text, ''),
+    serviceLabel: localizedText(item.service?.name ?? item.service_name ?? item.service, ''),
+    date: localizedText(item.date_label ?? item.created_at ?? item.date, ''),
     verified: item.verified ?? item.is_verified ?? true,
-    photo: mapMediaUrl(mediaUrl(item.photo_url ?? item.image_url ?? item.photo ?? item.image)) || local.photo || '',
+    photo: mapMediaUrl(mediaUrl(item.photo_url ?? item.image_url ?? item.photo ?? item.image)) || '',
   }
 }
 
-export const fetchReviews = () =>
-  remoteOrFallback(async () => {
-    const response = await doctolApi.reviews('home')
-    const payload = apiData.unwrap(response, {})
-    const items = apiData.list(response).map(mapReview)
-    const summarySource =
-      payload.rating_summary ??
-      payload.reviews_summary ??
-      payload.summary ??
-      response?.meta?.rating_summary ??
-      {}
-    const summary = {
-      average: Number(summarySource.average ?? summarySource.rating ?? ratingSummary.average),
-      total: Number(summarySource.total ?? summarySource.count ?? payload.total ?? ratingSummary.total),
-      breakdown: summarySource.breakdown ?? ratingSummary.breakdown,
-    }
-    return { items: items.length ? items : reviews, summary }
-  }, { items: reviews, summary: ratingSummary })
+export const fetchReviews = async () => {
+  // Fetch reviews from API only - no dummy data fallback
+  const response = await doctolApi.reviews('home')
+  const payload = apiData.unwrap(response, {})
+  const items = apiData.list(response).map(mapReview)
+  const summarySource =
+    payload.rating_summary ??
+    payload.reviews_summary ??
+    payload.summary ??
+    response?.meta?.rating_summary ??
+    {}
+  const summary = {
+    average: Number(summarySource.average ?? summarySource.rating ?? 0),
+    total: Number(summarySource.total ?? summarySource.count ?? payload.total ?? 0),
+    breakdown: summarySource.breakdown ?? {},
+  }
+  return { items, summary }
+}
 
-export const fetchSettings = () =>
-  remoteOrFallback(async () => apiData.unwrap(await doctolApi.settings(), {}), {})
+export const fetchSettings = async () => {
+  // Fetch settings from API only
+  return apiData.unwrap(await doctolApi.settings(), {})
+}
 
-export const fetchSpinRewards = () =>
-  remoteOrFallback(async () => {
-    const response = await doctolApi.spinRewards()
-    const payload = apiData.unwrap(response, {})
-    if (Array.isArray(payload)) return payload
-    return payload.rewards ?? payload.items ?? payload.prizes ?? payload.data ?? []
-  }, [])
+export const fetchSpinRewards = async () => {
+  // Fetch spin rewards from API only
+  const response = await doctolApi.spinRewards()
+  const payload = apiData.unwrap(response, {})
+  if (Array.isArray(payload)) return payload
+  return payload.rewards ?? payload.items ?? payload.prizes ?? payload.data ?? []
+}
 /**
  * The index only ever renders the teaser fields, so the list endpoint projects
  * them out and leaves the article body to `fetchArticle`. A real API would draw
@@ -315,106 +237,94 @@ function mediaUrl(value) {
   return ''
 }
 
-export const fetchArticles = () =>
-  remoteOrFallback(async () => {
-    const result = apiData.list(await doctolApi.blog('page=1&per_page=20'))
-    return result.length ? result.map((item, index) => {
-      const local = articles.find((entry) => entry.slug === item.slug) ?? articles[index % articles.length]
-      const category = item.category ?? item.blog_category ?? item.category_name
-      const remoteImage = mapMediaUrl(mediaUrl(
-        item.image_url ??
-        item.cover_image_url ??
-        item.featured_image_url ??
-        item.thumbnail_url ??
-        item.image ??
-        item.cover_image ??
-        item.featured_image ??
-        item.thumbnail ??
-        item.media,
-      ))
-      return {
-        ...local,
-        ...item,
-        id: item.id ?? local.id,
-        slug: item.slug ?? local.slug,
-        title: localizedText(item.title ?? item.name, local.title),
-        excerpt: localizedText(
-          item.excerpt ?? item.short_description ?? item.description,
-          local.excerpt,
-        ),
-        category: localizedText(category?.name ?? category?.title ?? category, local.category),
-        categoryId: category?.slug ?? item.category_slug ?? item.category_id ?? local.categoryId,
-        image: remoteImage || local.image,
-        fallbackImage: local.image,
-        readingTime: localizedText(
-          item.reading_time ?? item.read_time ?? item.display_reading_time,
-          local.readingTime,
-        ),
-        iso: item.published_at ?? item.date ?? item.created_at ?? local.iso,
-      }
-    }) : articles.map(teaser)
-  }, articles.map(teaser))
-export const fetchArticle = (slug) =>
-  remoteOrFallback(async () => {
-    const response = apiData.unwrap(await doctolApi.article(slug), {})
-    const item = response?.article ?? response?.item ?? response
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
-      throw new ApiError('المقال غير موجود', 404)
-    }
-    const local = articles.find((entry) => entry.slug === slug) ?? {}
+export const fetchArticles = async () => {
+  // Fetch articles from API only - no dummy data fallback
+  const result = apiData.list(await doctolApi.blog('page=1&per_page=20'))
+  return result.map((item, index) => {
+    const category = item.category ?? item.blog_category ?? item.category_name
     const remoteImage = mapMediaUrl(mediaUrl(
-      item.image_url ?? item.cover_image_url ?? item.featured_image_url ?? item.image ?? item.media,
+      item.image_url ??
+      item.cover_image_url ??
+      item.featured_image_url ??
+      item.thumbnail_url ??
+      item.image ??
+      item.cover_image ??
+      item.featured_image ??
+      item.thumbnail ??
+      item.media,
     ))
     return {
-      ...local,
       ...item,
-      slug: item.slug ?? slug,
-      title: localizedText(item.title ?? item.name, local.title),
-      excerpt: localizedText(item.excerpt ?? item.short_description ?? item.description, local.excerpt),
-      intro: localizedText(item.intro ?? item.summary ?? item.description, local.intro),
-      category: localizedText(item.category?.name ?? item.category_name ?? item.category, local.category),
-      image: remoteImage || local.image,
-      fallbackImage: local.image || '',
-      readingTime: localizedText(item.reading_time ?? item.read_time, local.readingTime),
-      iso: item.published_at ?? item.created_at ?? item.date ?? local.iso,
-      sections: Array.isArray(item.sections) && item.sections.length ? item.sections : local.sections,
-      faq: Array.isArray(item.faq) ? item.faq : local.faq,
-      takeaways: Array.isArray(item.takeaways) ? item.takeaways : local.takeaways,
-      related: Array.isArray(item.related) ? item.related : local.related,
-      cta: item.cta ?? local.cta,
+      id: item.id ?? `article-${index}`,
+      slug: item.slug ?? '',
+      title: localizedText(item.title ?? item.name, ''),
+      excerpt: localizedText(item.excerpt ?? item.short_description ?? item.description, ''),
+      category: localizedText(category?.name ?? category?.title ?? category, ''),
+      categoryId: category?.slug ?? item.category_slug ?? item.category_id ?? '',
+      image: remoteImage || '',
+      readingTime: localizedText(item.reading_time ?? item.read_time ?? item.display_reading_time, ''),
+      iso: item.published_at ?? item.date ?? item.created_at ?? '',
     }
-  }, articles.find((a) => a.slug === slug) ?? null)
-export const fetchHomeContent = () =>
-  remoteOrFallback(async () => {
-    const home = apiData.unwrap(await doctolApi.home(), {})
-    const remoteFaqs = apiData.list(await doctolApi.faqs('home'))
-    const heroSection = home.heroes_section ?? home.hero_section ?? home.hero ?? {}
-    const heroInfo = heroSection.info ?? heroSection.content ?? heroSection
-    return {
-      trustFeatures: home.trust_features ?? home.features ?? trustFeatures,
-      stats: home.stats ?? stats,
-      experienceSteps: home.experience_steps ?? home.how_it_works ?? experienceSteps,
-      beforeAfterCases: home.before_after ?? home.before_after_cases ?? beforeAfterCases,
-      faqs: remoteFaqs.length ? remoteFaqs : (home.faqs ?? faqs),
-      discoveryOptions: home.discovery_options ?? discoveryOptions,
-      hero: {
-        title: localizedText(heroInfo.title ?? heroInfo.heading, ''),
-        description: localizedText(heroInfo.description ?? heroInfo.subtitle, ''),
-        eyebrow: localizedText(heroInfo.eyebrow ?? heroInfo.badge_text, ''),
-        buttonText: localizedText(heroInfo.button_1_text ?? heroInfo.button_text, ''),
-        image: mapMediaUrl(mediaUrl(heroInfo.image_url ?? heroInfo.image ?? heroSection.image)),
-        checks: Array.isArray(heroInfo.features ?? heroInfo.checks)
-          ? (heroInfo.features ?? heroInfo.checks).map((item) => localizedText(item?.title ?? item?.label ?? item)).filter(Boolean)
-          : [],
-      },
-      raw: home,
-    }
-  }, { trustFeatures, stats, experienceSteps, beforeAfterCases, faqs, discoveryOptions, hero: {}, raw: {} })
-export const fetchCities = () =>
-  remoteOrFallback(async () => {
-    const result = apiData.list(await doctolApi.cities()).map(mapCity)
-    return result.length ? result : cities
-  }, cities)
+  })
+}
+export const fetchArticle = async (slug) => {
+  // Fetch article from API only - no dummy data fallback
+  const response = apiData.unwrap(await doctolApi.article(slug), {})
+  const item = response?.article ?? response?.item ?? response
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    throw new Error('المقال غير موجود')
+  }
+  const remoteImage = mapMediaUrl(mediaUrl(
+    item.image_url ?? item.cover_image_url ?? item.featured_image_url ?? item.image ?? item.media,
+  ))
+  return {
+    ...item,
+    slug: item.slug ?? slug,
+    title: localizedText(item.title ?? item.name, ''),
+    excerpt: localizedText(item.excerpt ?? item.short_description ?? item.description, ''),
+    intro: localizedText(item.intro ?? item.summary ?? item.description, ''),
+    category: localizedText(item.category?.name ?? item.category_name ?? item.category, ''),
+    image: remoteImage || '',
+    readingTime: localizedText(item.reading_time ?? item.read_time, ''),
+    iso: item.published_at ?? item.created_at ?? item.date ?? '',
+    sections: Array.isArray(item.sections) ? item.sections : [],
+    faq: Array.isArray(item.faq) ? item.faq : [],
+    takeaways: Array.isArray(item.takeaways) ? item.takeaways : [],
+    related: Array.isArray(item.related) ? item.related : [],
+    cta: item.cta ?? null,
+  }
+}
+export const fetchHomeContent = async () => {
+  // Fetch home content from API only - no dummy data fallback
+  const home = apiData.unwrap(await doctolApi.home(), {})
+  const remoteFaqs = apiData.list(await doctolApi.faqs('home'))
+  const heroSection = home.heroes_section ?? home.hero_section ?? home.hero ?? {}
+  const heroInfo = heroSection.info ?? heroSection.content ?? heroSection
+  return {
+    trustFeatures: home.trust_features ?? home.features ?? [],
+    stats: home.stats ?? [],
+    experienceSteps: home.experience_steps ?? home.how_it_works ?? [],
+    beforeAfterCases: home.before_after ?? home.before_after_cases ?? [],
+    faqs: remoteFaqs.length ? remoteFaqs : (home.faqs ?? []),
+    discoveryOptions: home.discovery_options ?? [],
+    hero: {
+      title: localizedText(heroInfo.title ?? heroInfo.heading, ''),
+      description: localizedText(heroInfo.description ?? heroInfo.subtitle, ''),
+      eyebrow: localizedText(heroInfo.eyebrow ?? heroInfo.badge_text, ''),
+      buttonText: localizedText(heroInfo.button_1_text ?? heroInfo.button_text, ''),
+      image: mapMediaUrl(mediaUrl(heroInfo.image_url ?? heroInfo.image ?? heroSection.image)),
+      checks: Array.isArray(heroInfo.features ?? heroInfo.checks)
+        ? (heroInfo.features ?? heroInfo.checks).map((item) => localizedText(item?.title ?? item?.label ?? item)).filter(Boolean)
+        : [],
+    },
+    raw: home,
+  }
+}
+export const fetchCities = async () => {
+  // Fetch cities from API only - no dummy data fallback
+  const result = apiData.list(await doctolApi.cities()).map(mapCity)
+  return result
+}
 
 /* ------------------------------------------------------------------ */
 /* Availability                                                        */
@@ -481,7 +391,6 @@ export async function fetchAvailability(dateISO, serviceSlug = '') {
 
 /** Next 14 bookable days. */
 export async function fetchBookableDays() {
-  await delay()
   const out = []
   const today = new Date()
   for (let i = 0; i < 14; i += 1) {
