@@ -4,7 +4,7 @@
  * Wires `aria-invalid` + `aria-describedby` so screen readers announce the
  * validation message alongside the field.
  */
-import { computed, useId } from 'vue'
+import { computed, useId, useSlots } from 'vue'
 import DoctolIcon from '@/components/common/DoctolIcon.vue'
 
 const props = defineProps({
@@ -29,6 +29,8 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'blur'])
 
 const uid = useId()
+const slots = useSlots()
+const hasTrailing = computed(() => !!slots.trailing)
 const describedBy = computed(() => {
   const ids = []
   if (props.error) ids.push(`${uid}-error`)
@@ -44,7 +46,7 @@ function onInput(event) {
 </script>
 
 <template>
-  <div class="field" :class="{ 'field--error': error, 'field--disabled': disabled }">
+  <div class="field" :class="{ 'field--error': error, 'field--disabled': disabled, 'field--with-trailing': hasTrailing }">
     <label class="field__label" :for="uid">
       {{ label }}
       <span v-if="required" class="field__required" aria-hidden="true">*</span>
@@ -112,6 +114,13 @@ function onInput(event) {
         :size="18"
         class="field__chevron"
       />
+
+      <div
+        v-if="hasTrailing"
+        class="field__trailing"
+      >
+        <slot name="trailing" />
+      </div>
     </div>
 
     <Transition name="field-msg">
@@ -253,6 +262,22 @@ function onInput(event) {
 .field__message--error {
   color: var(--dt-danger);
   font-weight: var(--dt-fw-medium);
+}
+
+.field--with-trailing .field__input,
+.field--with-trailing .field__input--area {
+  padding-inline-end: 3rem;
+}
+
+.field__trailing {
+  position: absolute;
+  inset-inline-end: var(--dt-space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
 }
 
 .field-msg-enter-active,

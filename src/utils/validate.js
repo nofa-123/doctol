@@ -42,7 +42,7 @@ export const validators = {
 
   address(value) {
     const v = (value ?? '').trim()
-    if (!v) return 'اكتب تفاصيل العنوان'
+    if (!v) return 'اكتب العنوان الوطني'
     if (v.length < 8) return 'أضف تفاصيل أوضح (اسم الشارع أو رقم المبنى)'
     return ''
   },

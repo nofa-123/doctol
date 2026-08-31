@@ -121,7 +121,7 @@ onMounted(async () => {
         as="select"
         icon="home"
         required
-        :placeholder="neighborhoodsLoading ? 'جاري تحميل الأحياء…' : booking.location.cityId ? 'اختر الحي' : 'اختر المدينة أولاً'"
+        :placeholder="neighborhoodsLoading ? 'جاري تحميل الأحياء…' : booking.location.cityId ? 'اختر الحي' : 'اختر المدينة أولاّ'"
         :disabled="!booking.location.cityId || neighborhoodsLoading"
         :options="districts.map((d) => ({ value: d.id, label: d.name }))"
         :model-value="booking.location.neighborhoodId"
@@ -131,7 +131,7 @@ onMounted(async () => {
     </div>
 
     <BaseField
-      label="تفاصيل العنوان"
+      label="العنوان الوطني"
       placeholder="اسم الشارع، رقم المبنى، الدور، رقم الشقة"
       icon="list"
       required
@@ -139,7 +139,16 @@ onMounted(async () => {
       :model-value="booking.location.address"
       :error="booking.errors.address"
       @update:model-value="(value) => booking.setLocation({ address: value })"
-    />
+    >
+      <template #trailing>
+        <span
+          class="sl__pin-icon"
+          aria-hidden="true"
+        >
+          <DoctolIcon name="pin" :size="18" />
+        </span>
+      </template>
+    </BaseField>
 
     <BaseField
       label="ملاحظات للفريق"
@@ -245,5 +254,12 @@ onMounted(async () => {
   flex: none;
   margin-block-start: 0.15rem;
   color: var(--dt-teal-500);
+}
+
+.sl__pin-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dt-muted);
 }
 </style>
