@@ -148,7 +148,9 @@ export const useCartStore = defineStore('cart', () => {
   }
 
   function toApiItems() {
-    const serviceItems = lines.value.map((line) => {
+    const serviceItems = lines.value
+      .filter((line) => priceFor(line.service, line.config).valid)
+      .map((line) => {
       const configKind = line.service.config?.kind
       const groups = line.service.config?.groups ?? []
       let configuration = {}
@@ -183,9 +185,35 @@ export const useCartStore = defineStore('cart', () => {
             if (inputType === 'counter' || inputType === 'decimal') {
               configuration[key] = Number(value)
             } else if (inputType === 'collection') {
-              // Collection items - send as array
+              // Collection items: only send keys declared in schema.item_fields
               if (Array.isArray(value) && value.length > 0) {
-                configuration[key] = value
+                const itemFields = group.schema?.item_fields ?? []
+                const cleanItems = value.map((item) => {
+                  const clean = {}
+                  itemFields.forEach((field) => {
+                    const raw = item[field.key]
+                    if (raw !== undefined && raw !== null && raw !== '') {
+                      if (field.input_type === 'counter' || field.input_type === 'decimal') {
+                        clean[field.key] = Number(raw)
+                      } else if (field.input_type === 'multi_select') {
+                        clean[field.key] = Array.isArray(raw) ? raw : [raw]
+                      } else {
+                        clean[field.key] = String(raw)
+                      }
+                    }
+                  })
+                  return clean
+                }).filter((item) => Object.keys(item).length > 0)
+                if (cleanItems.length > 0) {
+                  configuration[key] = cleanItems
+                } else if (group.required) {
+                  // Required collections must be present (even empty) so the
+                  // backend does not reject the request before the user adds
+                  // ready-made items.
+                  configuration[key] = []
+                }
+              } else if (group.required) {
+                configuration[key] = []
               }
             } else if (inputType === 'multi_select') {
               // Multi-select - send as array

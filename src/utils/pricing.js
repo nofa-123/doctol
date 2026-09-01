@@ -29,37 +29,9 @@ export function defaultConfig(service) {
         c.groups.map((group) => {
           const inputType = group.inputType ?? 'select'
           if (inputType === 'collection') {
-            // Build a sensible default collection item from the schema
-            const schema = group.schema ?? {}
-            const itemFields = schema.item_fields ?? []
-            const typeField = itemFields.find((f) => f.key === 'type')
-            const firstType =
-              schema.displayOptions?.[0]?.value ??
-              typeField?.options?.[0]?.value ??
-              typeField?.options?.[0]?.key ??
-              ''
-            if (itemFields.some((f) => f.key === 'width_m')) {
-              // area collection (carpet / moquette)
-              const minArea = schema.pricing?.minimum_square_meters ?? 1
-              const side = Math.sqrt(Math.max(1, minArea))
-              return [group.key, [{ width_m: side, height_m: side, quantity: 1 }]]
-            }
-            if (itemFields.some((f) => f.key === 'type')) {
-              // per-unit collection (tank / curtain / mattress)
-              const item = { type: firstType, quantity: 1 }
-              // add any extra fields with sensible defaults
-              itemFields.forEach((field) => {
-                if (field.key === 'type' || field.key === 'quantity') return
-                if (field.input_type === 'decimal' || field.input_type === 'counter') {
-                  item[field.key] = Number(field.min ?? 0)
-                } else if (field.input_type === 'select') {
-                  item[field.key] = field.options?.[0]?.value ?? field.options?.[0]?.key ?? ''
-                } else {
-                  item[field.key] = field.default ?? ''
-                }
-              })
-              return [group.key, [item]]
-            }
+            // Collections start empty; the user adds items from the UI.
+            // Do not pre-fill a default item, otherwise hidden custom sizes
+            // get sent to the backend.
             return [group.key, []]
           }
           return [
@@ -131,26 +103,85 @@ export function priceFor(service, config) {
 
   switch (c.kind) {
     case 'dynamic': {
-      const missing = c.groups.filter((group) =>
-        group.required && (cfg[group.key] === undefined || cfg[group.key] === null || cfg[group.key] === ''),
-      )
-      const selections = c.groups.map((group) => {
-        const value = group.values.find((option) => String(option.key) === String(cfg[group.key]))
-        return { group, value }
+      const missing = c.groups.filter((group) => {
+        const val = cfg[group.key]
+        const inputType = group.inputType ?? 'select'
+        if (inputType === 'collection') {
+          return group.required && (!Array.isArray(val) || !val.length)
+        }
+        return group.required && (val === undefined || val === null || val === '')
       })
-      const total = selections.reduce(
-        (sum, row) => sum + (row.value?.priceAdjustment ?? 0),
-        c.basePrice ?? service.startingPrice ?? 0,
+      const replacesBase = c.groups.some((group) =>
+        (group.inputType ?? 'select') === 'collection' && group.schema?.pricing?.replace_base_price,
       )
+      let total = replacesBase ? 0 : (c.basePrice ?? service.startingPrice ?? 0)
+      const lines = []
+      const summaryParts = []
+
+      c.groups.forEach((group) => {
+        const inputType = group.inputType ?? 'select'
+        const val = cfg[group.key]
+
+        if (inputType === 'collection') {
+          const items = Array.isArray(val) ? val : []
+          if (!items.length) return
+
+          const schema = group.schema ?? {}
+          const displayOptions = schema.displayOptions ?? []
+          const itemFields = schema.item_fields ?? []
+          const hasArea = itemFields.some((f) => f.key === 'width_m')
+
+          if (hasArea) {
+            // area pricing (carpet / custom curtains)
+            const pricePerSqm = schema.pricing?.price_per_square_meter ?? 0
+            const minArea = schema.pricing?.minimum_square_meters ?? 0
+            items.forEach((item, index) => {
+              const area = Math.max(0, Number(item.width_m || item.width || 0)) * Math.max(0, Number(item.height_m || item.height || 0))
+              const billable = Math.max(area, minArea)
+              const qty = Math.max(1, Number(item.quantity || 0))
+              const amount = Math.round(billable * qty * pricePerSqm)
+              total += amount
+              const label = `مقاس ${index + 1}: ${item.width_m}م × ${item.height_m}م × ${qty}`
+              lines.push({ label, amount })
+              if (index === 0) summaryParts.push(`مقاس مخصص: ${item.width_m}م × ${item.height_m}م × ${qty}`)
+            })
+          } else {
+            // per-unit pricing (tank / curtain / mattress)
+            const displayOptions = schema.displayOptions ?? schema.display_options ?? []
+            const priceMap = schema.pricing?.prices ?? {}
+            items.forEach((item) => {
+              const qty = Math.max(1, Number(item.quantity || 0))
+              const unitPrice = priceMap[item.type] ?? 0
+              const amount = Math.round(qty * unitPrice)
+              if (!amount) return
+              total += amount
+              const display = displayOptions.find((o) => o.value === item.type || o.key === item.type)
+              const rawName = display?.name ?? display?.label ?? item.type
+              const name = typeof rawName === 'object' ? (rawName.ar ?? rawName.en ?? item.type) : rawName
+              const label = `${name} × ${qty}`
+              lines.push({ label, amount })
+              summaryParts.push(label)
+            })
+          }
+          return
+        }
+
+        const value = group.values.find((option) => String(option.key) === String(val))
+        total += value?.priceAdjustment ?? 0
+        if (value) {
+          lines.push({ label: `${group.label}: ${value.label}`, amount: value.priceAdjustment })
+          summaryParts.push(value.label)
+        } else if (val !== undefined && val !== null && val !== '') {
+          summaryParts.push(`${group.label}: ${val}`)
+        }
+      })
+
       return {
         total,
         count: missing.length ? 0 : 1,
         valid: missing.length === 0,
-        summary: selections.map((row) => row.value?.label ?? `${row.group.label}: ${cfg[row.group.key]}`).join(' • '),
-        lines: selections.filter((row) => row.value).map((row) => ({
-          label: `${row.group.label}: ${row.value.label}`,
-          amount: row.value.priceAdjustment,
-        })),
+        summary: summaryParts.join(' • '),
+        lines,
       }
     }
     case 'capacity': {
